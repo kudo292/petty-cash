@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { background: #0f0f0f; font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif; color: #f0ede8; }
@@ -27,7 +28,11 @@ input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-const STORAGE_KEY = "petty_cash_ledger_v2";
+const SUPABASE_URL = "https://zimvamllpzcgtnvuvpoq.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_aPl3HiPa-iM83BIYFy6vzw_XmSUcD9r";
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const SETTINGS_KEY = "petty_cash_settings_v1";
 
 const formatCurrency = (n) =>
   new Intl.NumberFormat("ja-JP", { style: "currency", currency: "JPY" }).format(n);
@@ -39,26 +44,30 @@ const formatDate = (d) => {
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-const CATEGORIES = [
-  { id: "terra",    label: "テラミート",       emoji: "🥩", color: "#d95f5f" },
-  { id: "fresh",    label: "フレッシュバザール", emoji: "🛒", color: "#5cb85c" },
-  { id: "hellos",   label: "ハローズ",          emoji: "🏪", color: "#5b9bd5" },
-  { id: "nafco",    label: "ナフコ",            emoji: "🔧", color: "#e8a820" },
-  { id: "juntendo", label: "ジュンテンドー",    emoji: "🏠", color: "#9b59b6" },
-  { id: "komeri",   label: "コメリ",            emoji: "🌱", color: "#27ae60" },
-  { id: "sanko",    label: "三功商会",          emoji: "🏭", color: "#e67e22" },
-  { id: "water",    label: "上下水道料金",      emoji: "💧", color: "#3498db" },
-  { id: "other",    label: "その他",            emoji: "📋", color: "#888"   },
+const DEFAULT_CATEGORIES = [
+  { id: "terra",    label: "テラミート",         emoji: "🥩", color: "#d95f5f", taxRate: 8,  account: "仕入れ" },
+  { id: "fresh",    label: "フレッシュバザール",  emoji: "🛒", color: "#5cb85c", taxRate: 8,  account: "仕入れ" },
+  { id: "hellos",   label: "ハローズ",            emoji: "🏪", color: "#5b9bd5", taxRate: 8,  account: "仕入れ" },
+  { id: "costco",   label: "コストコ",            emoji: "🏬", color: "#1a5276", taxRate: 8,  account: "仕入れ" },
+  { id: "nafco",    label: "ナフコ",              emoji: "🔧", color: "#e8a820", taxRate: 10, account: "消耗品" },
+  { id: "juntendo", label: "ジュンテンドー",      emoji: "🏠", color: "#9b59b6", taxRate: 10, account: "修繕費" },
+  { id: "komeri",   label: "コメリ",              emoji: "🌱", color: "#27ae60", taxRate: 10, account: "修繕費" },
+  { id: "sanko",    label: "三功商会",            emoji: "🏭", color: "#e67e22", taxRate: 10, account: "修繕費" },
+  { id: "water",    label: "上下水道料金",        emoji: "💧", color: "#3498db", taxRate: 10, account: "水道光熱費" },
+  { id: "cake",     label: "ケーキ",              emoji: "🎂", color: "#e91e8c", taxRate: 8,  account: "仕入れ" },
+  { id: "other",    label: "その他",              emoji: "📋", color: "#888",    taxRate: 10, account: "消耗品" },
 ];
+
+const COLORS = ["#d95f5f","#5cb85c","#5b9bd5","#e8a820","#9b59b6","#27ae60","#e67e22","#3498db","#e91e8c","#888","#f39c12","#1abc9c"];
+const ACCOUNTS = ["仕入れ", "消耗品", "修繕費", "水道光熱費", "その他"];
 
 function App() {
   const [entries, setEntries] = useState([]);
   const [initialBalance, setInitialBalance] = useState(0);
   const [view, setView] = useState("ledger");
-  const [form, setForm] = useState({ date: todayStr(), description: "", amount: "", type: "expense", category: "terra", staff: "工藤" });
+  const [form, setForm] = useState({ date: todayStr(), description: "", amount: "", type: "expense", category: "terra", staff: "工藤", taxRate: 8, account: "仕入れ" });
   const [editingId, setEditingId] = useState(null);
   const [capturing, setCapturing] = useState(false);
-  const [captureResult, setCaptureResult] = useState(null);
   const [toast, setToast] = useState(null);
   const [initBalInput, setInitBalInput] = useState("");
   const [currentReceiptImage, setCurrentReceiptImage] = useState(null);
@@ -68,28 +77,46 @@ function App() {
   const [filterMonth, setFilterMonth] = useState("all");
   const [staff, setStaff] = useState(["工藤", "高橋"]);
   const [newStaffName, setNewStaffName] = useState("");
-  const [printHtml, setPrintHtml] = useState(null);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [newCatLabel, setNewCatLabel] = useState("");
+  const [newCatEmoji, setNewCatEmoji] = useState("📋");
+  const [newCatTax, setNewCatTax] = useState(10);
+  const [newCatAccount, setNewCatAccount] = useState("消耗品");
+  const [loading, setLoading] = useState(true);
   const fileRef = useRef();
 
   useEffect(() => {
+    loadEntries();
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(SETTINGS_KEY);
       if (saved) {
         const data = JSON.parse(saved);
-        setEntries(data.entries || []);
         setInitialBalance(data.initialBalance || 0);
         setInitBalInput(String(data.initialBalance || 0));
         setStaff(data.staff || ["工藤", "高橋"]);
+        setCategories(data.categories || DEFAULT_CATEGORIES);
       }
     } catch {}
   }, []);
 
-  const saveData = (newEntries, newBalance, newStaff) => {
+  const loadEntries = async () => {
+    setLoading(true);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        entries: newEntries !== null ? newEntries : entries,
+      const { data, error } = await supabase.from("entries").select("*").order("date", { ascending: true });
+      if (error) throw error;
+      setEntries(data || []);
+    } catch (e) {
+      showToast("データ読み込みエラー", "error");
+    }
+    setLoading(false);
+  };
+
+  const saveSettings = (newBalance, newStaff, newCats) => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({
         initialBalance: newBalance !== null ? newBalance : initialBalance,
-        staff: newStaff !== null ? newStaff : staff
+        staff: newStaff !== null ? newStaff : staff,
+        categories: newCats !== null ? newCats : categories,
       }));
     } catch {}
   };
@@ -117,56 +144,78 @@ function App() {
     return catOk && monOk;
   });
 
-  const handleSubmit = () => {
+  const resetForm = () => {
+    const firstCat = categories[0] || DEFAULT_CATEGORIES[0];
+    setForm({ date: todayStr(), description: "", amount: "", type: "expense", category: firstCat.id, staff: staff[0] || "工藤", taxRate: firstCat.taxRate, account: firstCat.account });
+  };
+
+  const handleCategoryChange = (catId) => {
+    const cat = categories.find(c => c.id === catId);
+    if (cat) {
+      setForm(f => ({ ...f, category: catId, taxRate: cat.taxRate, account: cat.account }));
+    }
+  };
+
+  const handleSubmit = async () => {
     if (!form.date || !form.description || !form.amount) return showToast("全項目を入力してください", "error");
     const amt = parseInt(form.amount.replace(/,/g, ""), 10);
     if (isNaN(amt) || amt <= 0) return showToast("金額が無効です", "error");
+
+    const entryData = {
+      date: form.date,
+      description: form.description,
+      amount: amt,
+      type: form.type,
+      category: form.category,
+      staff: form.staff,
+      tax_rate: form.taxRate,
+      account: form.account,
+      receipt_image: currentReceiptImage || null,
+    };
+
     if (editingId) {
-      const updated = entries.map(e => e.id === editingId ? { ...e, ...form, amount: amt } : e);
-      setEntries(updated);
-      saveData(updated, null, null);
+      const { error } = await supabase.from("entries").update(entryData).eq("id", editingId);
+      if (error) return showToast("更新失敗", "error");
+      showToast("更新しました");
       setEditingId(null);
       setCurrentReceiptImage(null);
       setSplitMode(false);
-      setForm({ date: todayStr(), description: "", amount: "", type: "expense", category: "terra", staff: staff[0] || "工藤" });
+      resetForm();
       setView("ledger");
-      showToast("更新しました");
     } else {
-      const newEntry = { id: Date.now(), ...form, amount: amt, receiptImage: currentReceiptImage || null };
-      const updated = [...entries, newEntry];
-      setEntries(updated);
-      saveData(updated, null, null);
+      const { error } = await supabase.from("entries").insert([entryData]);
+      if (error) return showToast("登録失敗: " + error.message, "error");
       showToast("登録しました");
       if (splitMode) {
         setForm(f => ({ ...f, description: "", amount: "" }));
       } else {
         setCurrentReceiptImage(null);
-        setCaptureResult(null);
-        setForm({ date: todayStr(), description: "", amount: "", type: "expense", category: "terra", staff: staff[0] || "工藤" });
+        resetForm();
         setView("ledger");
       }
     }
+    await loadEntries();
   };
 
   const handleEdit = (entry) => {
-    setForm({ date: entry.date, description: entry.description, amount: String(entry.amount), type: entry.type, category: entry.category || "other", staff: entry.staff || staff[0] || "工藤" });
-    setCurrentReceiptImage(entry.receiptImage || null);
+    setForm({ date: entry.date, description: entry.description, amount: String(entry.amount), type: entry.type, category: entry.category || "other", staff: entry.staff || staff[0] || "工藤", taxRate: entry.tax_rate || 10, account: entry.account || "消耗品" });
+    setCurrentReceiptImage(entry.receipt_image || null);
     setEditingId(entry.id);
     setSplitMode(false);
     setView("capture");
   };
 
-  const handleDelete = (id) => {
-    const updated = entries.filter(e => e.id !== id);
-    setEntries(updated);
-    saveData(updated, null, null);
+  const handleDelete = async (id) => {
+    if (!window.confirm("削除しますか？")) return;
+    const { error } = await supabase.from("entries").delete().eq("id", id);
+    if (error) return showToast("削除失敗", "error");
     showToast("削除しました");
+    await loadEntries();
   };
 
   const handleCapture = async (file) => {
     if (!file) return;
     setCapturing(true);
-    setCaptureResult(null);
     try {
       const base64 = await new Promise((res, rej) => {
         const r = new FileReader();
@@ -176,26 +225,9 @@ function App() {
       });
       const mediaType = file.type || "image/jpeg";
       setCurrentReceiptImage("data:" + mediaType + ";base64," + base64);
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: [
-            { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-            { type: "text", text: 'このレシートから日付・店名・合計金額を抽出。JSONのみ返答。{"date":"YYYY-MM-DD","description":"店名20文字以内","amount":数値}' }
-          ]}]
-        })
-      });
-      const data = await response.json();
-      const text = data.content?.map(c => c.text || "").join("") || "";
-      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
-      setCaptureResult(parsed);
-      setForm(f => ({ ...f, date: parsed.date || todayStr(), description: parsed.description || "", amount: String(parsed.amount || "") }));
-      showToast("読み取り成功！内容を確認してください");
-    } catch {
       showToast("写真を保存しました。手動で入力してください");
+    } catch {
+      showToast("写真の読み込みに失敗しました", "error");
     }
     setCapturing(false);
   };
@@ -204,7 +236,7 @@ function App() {
     const v = parseInt(initBalInput.replace(/,/g, ""), 10);
     if (isNaN(v)) return showToast("無効な金額です", "error");
     setInitialBalance(v);
-    saveData(null, v, null);
+    saveSettings(v, null, null);
     showToast("前残高を保存しました");
     setView("ledger");
   };
@@ -220,73 +252,42 @@ function App() {
     const totalIncome = entries.filter(e => e.type === "income").reduce((a, e) => a + e.amount, 0);
     const totalExpense = entries.filter(e => e.type === "expense").reduce((a, e) => a + e.amount, 0);
 
+    const tax8Total = entries.filter(e => e.type === "expense" && e.tax_rate === 8).reduce((a, e) => a + e.amount, 0);
+    const tax10Total = entries.filter(e => e.type === "expense" && e.tax_rate === 10).reduce((a, e) => a + e.amount, 0);
+
+    const accountTotals = ACCOUNTS.map(acc => {
+      const total = entries.filter(e => e.type === "expense" && e.account === acc).reduce((a, e) => a + e.amount, 0);
+      return { acc, total };
+    }).filter(a => a.total > 0);
+
     const tableRows = rowsForPrint.map((e, i) => {
-      const cat = CATEGORIES.find(c => c.id === e.category) || CATEGORIES[CATEGORIES.length-1];
-      return `<tr style="background:${i%2===0?"#fff":"#f9f9f9"}">
-        <td>${formatDate(e.date)}</td>
-        <td>${e.staff||"—"}</td>
-        <td>${e.description}</td>
-        <td style="color:${cat.color}">${cat.emoji} ${cat.label}</td>
-        <td style="text-align:right;color:#2a7a2a">${e.type==="income"?formatCurrency(e.amount):""}</td>
-        <td style="text-align:right;color:#a00">${e.type==="expense"?formatCurrency(e.amount):""}</td>
-        <td style="text-align:right;font-weight:600">${formatCurrency(e.runningBalance)}</td>
-      </tr>`;
+      const cat = categories.find(c => c.id === e.category) || categories[categories.length-1];
+      const taxLabel = e.tax_rate ? e.tax_rate + "%" : "";
+      return "<tr style='background:" + (i%2===0?"#fff":"#f9f9f9") + "'><td>" + formatDate(e.date) + "</td><td>" + (e.staff||"—") + "</td><td>" + e.description + "</td><td style='color:" + (cat?cat.color:"#888") + "'>" + (cat?cat.emoji:"") + " " + (cat?cat.label:"") + "</td><td>" + (e.account||"") + "</td><td style='text-align:center'>" + taxLabel + "</td><td style='text-align:right;color:#2a7a2a'>" + (e.type==="income"?formatCurrency(e.amount):"") + "</td><td style='text-align:right;color:#a00'>" + (e.type==="expense"?formatCurrency(e.amount):"") + "</td><td style='text-align:right;font-weight:600'>" + formatCurrency(e.runningBalance) + "</td></tr>";
     }).join("");
 
-    const catRows = CATEGORIES.map(cat => {
+    const catRows = categories.map(cat => {
       const total = entries.filter(e => e.type === "expense" && e.category === cat.id).reduce((a, e) => a + e.amount, 0);
-      return total > 0 ? `<tr><td>${cat.emoji} ${cat.label}</td><td style="text-align:right;font-weight:600">${formatCurrency(total)}</td></tr>` : "";
+      return total > 0 ? "<tr><td>" + cat.emoji + " " + cat.label + "</td><td>" + cat.account + "</td><td style='text-align:center'>" + cat.taxRate + "%</td><td style='text-align:right;font-weight:600'>" + formatCurrency(total) + "</td></tr>" : "";
     }).join("");
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>小口現金出納帳 ${dateStr}</title>
-    <style>
-      body{font-family:'Hiragino Sans',sans-serif;font-size:11px;color:#111;margin:16px;padding-bottom:40px}
-      h1{font-size:16px;margin-bottom:4px}
-      .sub{color:#666;font-size:10px;margin-bottom:12px}
-      .summary{display:flex;gap:6px;margin-bottom:14px}
-      .sbox{border:1px solid #ddd;border-radius:6px;padding:6px 8px;flex:1;text-align:center}
-      .sbox .l{font-size:9px;color:#888}
-      .sbox .v{font-size:12px;font-weight:700;margin-top:2px}
-      table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:10px}
-      th{background:#222;color:#fff;padding:5px 4px;text-align:left}
-      td{padding:5px 4px;border-bottom:1px solid #eee}
-      h2{font-size:12px;margin:12px 0 6px;border-left:3px solid #e8a820;padding-left:6px;color:#444}
-      @media print{body{margin:8px}}
-    </style></head><body>
-    <h1>小口現金 出納帳</h1>
-    <div class="sub">出力日：${dateStr}　現在残高：${formatCurrency(balance)}</div>
-    <div class="summary">
-      <div class="sbox"><div class="l">前残高</div><div class="v">${formatCurrency(initialBalance)}</div></div>
-      <div class="sbox"><div class="l">総入金</div><div class="v" style="color:#2a7a2a">${formatCurrency(totalIncome)}</div></div>
-      <div class="sbox"><div class="l">総出金</div><div class="v" style="color:#a00">${formatCurrency(totalExpense)}</div></div>
-      <div class="sbox"><div class="l">現在残高</div><div class="v" style="color:#b8860b">${formatCurrency(balance)}</div></div>
-    </div>
-    <table>
-      <thead><tr><th>日付</th><th>担当</th><th>摘要</th><th>区分</th><th style="text-align:right">入金</th><th style="text-align:right">出金</th><th style="text-align:right">残高</th></tr></thead>
-      <tbody>
-        <tr><td>—</td><td></td><td style="color:#888;font-style:italic">前残高</td><td></td><td></td><td></td><td style="text-align:right;font-weight:600">${formatCurrency(initialBalance)}</td></tr>
-        ${tableRows}
-      </tbody>
-    </table>
-    <h2>カテゴリ別出金内訳</h2>
-    <table><tbody>${catRows}</tbody></table>
-    <script>window.onload=function(){window.print()}<\/script>
-    </body></html>`;
+    const accountRows = accountTotals.map(a => "<tr><td>" + a.acc + "</td><td style='text-align:right;font-weight:600'>" + formatCurrency(a.total) + "</td></tr>").join("");
+
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>小口現金出納帳 " + dateStr + "</title><style>body{font-family:'Hiragino Sans',sans-serif;font-size:11px;color:#111;margin:16px}h1{font-size:16px;margin-bottom:4px}.sub{color:#666;font-size:10px;margin-bottom:12px}.summary{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}.sbox{border:1px solid #ddd;border-radius:6px;padding:6px 8px;flex:1;min-width:60px;text-align:center}.sbox .l{font-size:9px;color:#888}.sbox .v{font-size:12px;font-weight:700;margin-top:2px}table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:10px}th{background:#222;color:#fff;padding:5px 4px;text-align:left}td{padding:5px 4px;border-bottom:1px solid #eee}h2{font-size:12px;margin:12px 0 6px;border-left:3px solid #e8a820;padding-left:6px;color:#444}.tax-box{display:flex;gap:12px;margin-bottom:12px}.tbox{border:1px solid #ddd;border-radius:6px;padding:8px 12px;flex:1;text-align:center}.tbox .l{font-size:9px;color:#888}.tbox .v{font-size:13px;font-weight:700;margin-top:2px;color:#a00}@media print{body{margin:8px}}</style></head><body><h1>小口現金 出納帳</h1><div class='sub'>出力日：" + dateStr + "　現在残高：" + formatCurrency(balance) + "</div><div class='summary'><div class='sbox'><div class='l'>前残高</div><div class='v'>" + formatCurrency(initialBalance) + "</div></div><div class='sbox'><div class='l'>総入金</div><div class='v' style='color:#2a7a2a'>" + formatCurrency(totalIncome) + "</div></div><div class='sbox'><div class='l'>総出金</div><div class='v' style='color:#a00'>" + formatCurrency(totalExpense) + "</div></div><div class='sbox'><div class='l'>現在残高</div><div class='v' style='color:#b8860b'>" + formatCurrency(balance) + "</div></div></div><h2>消費税別合計</h2><div class='tax-box'><div class='tbox'><div class='l'>8%対象合計</div><div class='v'>" + formatCurrency(tax8Total) + "</div></div><div class='tbox'><div class='l'>10%対象合計</div><div class='v'>" + formatCurrency(tax10Total) + "</div></div></div><h2>勘定科目別合計</h2><table><thead><tr><th>科目</th><th style='text-align:right'>合計</th></tr></thead><tbody>" + accountRows + "</tbody></table><h2>明細</h2><table><thead><tr><th>日付</th><th>担当</th><th>摘要</th><th>店名</th><th>科目</th><th style='text-align:center'>税率</th><th style='text-align:right'>入金</th><th style='text-align:right'>出金</th><th style='text-align:right'>残高</th></tr></thead><tbody><tr><td>—</td><td></td><td style='color:#888;font-style:italic'>前残高</td><td></td><td></td><td></td><td></td><td></td><td style='text-align:right;font-weight:600'>" + formatCurrency(initialBalance) + "</td></tr>" + tableRows + "</tbody></table><h2>店名別出金内訳</h2><table><thead><tr><th>店名</th><th>科目</th><th style='text-align:center'>税率</th><th style='text-align:right'>合計</th></tr></thead><tbody>" + catRows + "</tbody></table></body></html>";
 
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "小口現金 出納帳.html";
-    a.click();
+    const win = window.open(url, "_blank");
+    if (!win) {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "小口現金出納帳.html";
+      a.click();
+    }
   };
-
-  const s = (obj) => Object.entries(obj).map(([k,v]) => k.replace(/([A-Z])/g, '-$1').toLowerCase() + ':' + v).join(';');
 
   return (
     <div style={{minHeight:"100vh",background:"#0f0f0f",paddingBottom:80}}>
-
 
       {receiptModal && (
         <div onClick={() => setReceiptModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
@@ -325,7 +326,12 @@ function App() {
 
         {view==="ledger" && (
           <div style={{animation:"slideIn 0.25s ease"}}>
-            {rows.length===0 ? (
+            {loading ? (
+              <div style={{textAlign:"center",padding:"60px 20px",color:"#555"}}>
+                <div style={{fontSize:30,marginBottom:12}}>⏳</div>
+                <div style={{fontSize:14}}>データを読み込み中...</div>
+              </div>
+            ) : rows.length===0 ? (
               <div style={{textAlign:"center",padding:"60px 20px",color:"#555"}}>
                 <div style={{fontSize:40,marginBottom:12}}>📂</div>
                 <div style={{fontSize:14}}>まだ明細がありません</div>
@@ -340,16 +346,10 @@ function App() {
                     ))}
                   </div>
                   <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2}}>
-                    {[{id:"all",label:"全項目",emoji:"",color:"#f5c842"},...CATEGORIES].map(cat => (
+                    {[{id:"all",label:"全項目",emoji:"",color:"#f5c842"},...categories].map(cat => (
                       <button key={cat.id} onClick={() => setFilterCategory(cat.id)} style={{flexShrink:0,padding:"5px 12px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,background:filterCategory===cat.id?(cat.id==="all"?"#f5c842":cat.color):"#1e1e1e",color:filterCategory===cat.id?(cat.id==="all"?"#111":"#fff"):"#888",fontWeight:filterCategory===cat.id?700:400}}>{cat.emoji} {cat.label}</button>
                     ))}
                   </div>
-                  {(filterCategory!=="all"||filterMonth!=="all") && (
-                    <div style={{background:"#1a1a1a",borderRadius:8,padding:"8px 12px",fontSize:12,display:"flex",justifyContent:"space-between"}}>
-                      <span style={{color:"#888"}}>絞り込み中 {filteredRows.length}件</span>
-                      <span style={{color:"#e07070",fontFamily:"monospace"}}>出金合計 {formatCurrency(filteredRows.filter(e=>e.type==="expense").reduce((a,e)=>a+e.amount,0))}</span>
-                    </div>
-                  )}
                 </div>
 
                 <div style={{overflowX:"auto"}}>
@@ -359,7 +359,7 @@ function App() {
                       <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>日付</th>
                       <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>担当</th>
                       <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>摘要</th>
-                      <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>区分</th>
+                      <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>店名</th>
                       <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>入金</th>
                       <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>出金</th>
                       <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>残高</th>
@@ -376,21 +376,21 @@ function App() {
                       <td></td>
                     </tr>
                     {filteredRows.map((e) => {
-                      const cat = CATEGORIES.find(c=>c.id===e.category)||CATEGORIES[CATEGORIES.length-1];
+                      const cat = categories.find(c=>c.id===e.category)||categories[categories.length-1];
                       return (
                         <tr key={e.id} className="row-hover" style={{borderBottom:"1px solid #1e1e1e"}}>
                           <td style={{padding:"9px 6px",color:"#888",fontSize:11,whiteSpace:"nowrap"}}>{formatDate(e.date)}</td>
                           <td style={{padding:"9px 4px",fontSize:11,color:"#aaa",whiteSpace:"nowrap"}}>{e.staff||"—"}</td>
-                          <td style={{padding:"9px 6px",color:"#ddd",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.description}</td>
+                          <td style={{padding:"9px 6px",color:"#ddd",maxWidth:80,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.description}</td>
                           <td style={{padding:"9px 4px"}}>
-                            <span style={{display:"inline-block",fontSize:10,padding:"2px 5px",borderRadius:10,background:cat.color+"22",color:cat.color,whiteSpace:"nowrap",fontWeight:600}}>{cat.emoji}</span>
+                            <span style={{display:"inline-block",fontSize:10,padding:"2px 5px",borderRadius:10,background:cat?(cat.color+"22"):"#888",color:cat?cat.color:"#888",whiteSpace:"nowrap",fontWeight:600}}>{cat?cat.emoji:""} {cat?cat.label:""}</span>
                           </td>
                           <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#5dc98a",fontSize:12}}>{e.type==="income"?formatCurrency(e.amount):""}</td>
                           <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#e07070",fontSize:12}}>{e.type==="expense"?formatCurrency(e.amount):""}</td>
                           <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:e.runningBalance>=0?"#f0ede8":"#e05555",fontSize:12}}>{formatCurrency(e.runningBalance)}</td>
                           <td style={{padding:"9px 4px",textAlign:"right"}}>
                             <div style={{display:"flex",gap:2}}>
-                              {e.receiptImage && <button className="btn-icon" onClick={() => setReceiptModal(e.receiptImage)} style={{background:"none",border:"none",color:"#f5c842",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🧾</button>}
+                              {e.receipt_image && <button className="btn-icon" onClick={() => setReceiptModal(e.receipt_image)} style={{background:"none",border:"none",color:"#f5c842",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🧾</button>}
                               <button className="btn-icon" onClick={() => handleEdit(e)} style={{background:"none",border:"none",color:"#666",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>✏️</button>
                               <button className="btn-icon" onClick={() => handleDelete(e.id)} style={{background:"none",border:"none",color:"#666",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🗑️</button>
                             </div>
@@ -411,23 +411,30 @@ function App() {
                   ))}
                 </div>
 
+                <div style={{background:"#141414",borderRadius:10,padding:"12px 14px",marginBottom:8,border:"1px solid #222"}}>
+                  <div style={{fontSize:11,color:"#555",marginBottom:8}}>消費税別出金</div>
+                  <div style={{display:"flex",gap:8}}>
+                    {[{label:"8%対象",rate:8,color:"#5dc98a"},{label:"10%対象",rate:10,color:"#e07070"}].map(t => {
+                      const total = entries.filter(e=>e.type==="expense"&&e.tax_rate===t.rate).reduce((a,e)=>a+e.amount,0);
+                      return (
+                        <div key={t.rate} style={{flex:1,background:"#1e1e1e",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                          <div style={{fontSize:10,color:"#666",marginBottom:4}}>{t.label}</div>
+                          <div style={{fontSize:13,fontWeight:600,fontFamily:"monospace",color:t.color}}>{formatCurrency(total)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div style={{background:"#141414",borderRadius:10,padding:"12px 14px",marginBottom:16,border:"1px solid #222"}}>
-                  <div style={{fontSize:11,color:"#555",marginBottom:10}}>カテゴリ別出金</div>
-                  {CATEGORIES.map(cat => {
-                    const total = entries.filter(e=>e.type==="expense"&&e.category===cat.id).reduce((a,e)=>a+e.amount,0);
-                    const cnt = entries.filter(e=>e.type==="expense"&&e.category===cat.id).length;
+                  <div style={{fontSize:11,color:"#555",marginBottom:8}}>勘定科目別出金</div>
+                  {ACCOUNTS.map(acc => {
+                    const total = entries.filter(e=>e.type==="expense"&&e.account===acc).reduce((a,e)=>a+e.amount,0);
                     if (total===0) return null;
-                    const expTotal = entries.filter(e=>e.type==="expense").reduce((a,e)=>a+e.amount,0);
-                    const pct = expTotal>0?Math.round(total/expTotal*100):0;
                     return (
-                      <div key={cat.id} style={{marginBottom:8}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                          <span style={{fontSize:12,color:cat.color}}>{cat.emoji} {cat.label}</span>
-                          <span style={{fontSize:12,fontFamily:"monospace",color:"#ccc"}}>{formatCurrency(total)} <span style={{color:"#555",fontSize:10}}>({cnt}件)</span></span>
-                        </div>
-                        <div style={{height:3,background:"#222",borderRadius:2}}>
-                          <div style={{width:pct+"%",height:"100%",background:cat.color,borderRadius:2}} />
-                        </div>
+                      <div key={acc} style={{display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #222"}}>
+                        <span style={{fontSize:12,color:"#ccc"}}>{acc}</span>
+                        <span style={{fontSize:12,fontFamily:"monospace",color:"#e07070"}}>{formatCurrency(total)}</span>
                       </div>
                     );
                   })}
@@ -446,11 +453,11 @@ function App() {
             <div onClick={() => fileRef.current?.click()} style={{border:"2px dashed #333",borderRadius:12,padding:"28px 20px",textAlign:"center",cursor:"pointer",marginBottom:20,background:capturing?"rgba(245,200,66,0.05)":"#141414"}}>
               <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e => handleCapture(e.target.files[0])} />
               {capturing ? (
-                <div><div style={{fontSize:28,marginBottom:8}}>🔍</div><div style={{color:"#f5c842",fontSize:13}}>レシートを読み取り中…</div></div>
-              ) : captureResult ? (
-                <div><div style={{fontSize:24,marginBottom:6}}>✅</div><div style={{color:"#5dc98a",fontSize:13}}>読み取り完了！下欄を確認してください</div><div style={{fontSize:11,color:"#666",marginTop:4}}>タップして別のレシートを読む</div></div>
+                <div><div style={{fontSize:28,marginBottom:8}}>⏳</div><div style={{color:"#f5c842",fontSize:13}}>処理中...</div></div>
+              ) : currentReceiptImage ? (
+                <div><div style={{fontSize:24,marginBottom:6}}>✅</div><div style={{color:"#5dc98a",fontSize:13}}>写真保存済み！下欄を入力してください</div></div>
               ) : (
-                <div><div style={{fontSize:32,marginBottom:8}}>📷</div><div style={{color:"#aaa",fontSize:14}}>レシートをタップしてアップロード</div><div style={{fontSize:11,color:"#555",marginTop:4}}>写真を保存してから手動入力も可</div></div>
+                <div><div style={{fontSize:32,marginBottom:8}}>📷</div><div style={{color:"#aaa",fontSize:14}}>レシートをタップしてアップロード</div></div>
               )}
             </div>
 
@@ -462,13 +469,6 @@ function App() {
                   <div style={{fontSize:11,color:"#555",marginTop:2}}>タップして拡大確認</div>
                 </div>
                 <button onClick={() => { setCurrentReceiptImage(null); setSplitMode(false); }} style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:18}}>✕</button>
-              </div>
-            )}
-
-            {splitMode && (
-              <div style={{background:"rgba(245,200,66,0.08)",border:"1px solid #f5c84240",borderRadius:8,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#f5c842"}}>
-                📎 同じレシートで分割登録中。
-                <button onClick={() => { setSplitMode(false); setCurrentReceiptImage(null); setCaptureResult(null); setForm({date:todayStr(),description:"",amount:"",type:"expense",category:"terra",staff:staff[0]||"工藤"}); }} style={{marginLeft:8,background:"none",border:"none",color:"#e07070",fontSize:12,cursor:"pointer"}}>終了</button>
               </div>
             )}
 
@@ -494,19 +494,40 @@ function App() {
 
               {form.type==="expense" && (
                 <div style={{marginBottom:16}}>
-                  <label style={{display:"block",fontSize:11,color:"#666",marginBottom:6}}>カテゴリ</label>
+                  <label style={{display:"block",fontSize:11,color:"#666",marginBottom:6}}>店名・カテゴリ</label>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-                    {CATEGORIES.map(cat => (
-                      <button key={cat.id} onClick={() => setForm(f => ({...f,category:cat.id}))}
+                    {categories.map(cat => (
+                      <button key={cat.id} onClick={() => handleCategoryChange(cat.id)}
                         style={{padding:"9px 10px",borderRadius:8,cursor:"pointer",background:form.category===cat.id?cat.color+"22":"#1a1a1a",color:form.category===cat.id?cat.color:"#666",border:form.category===cat.id?"1px solid "+cat.color+"55":"1px solid #2a2a2a",fontWeight:form.category===cat.id?700:400,fontSize:13,textAlign:"left"}}>
                         <span style={{marginRight:5}}>{cat.emoji}</span>{cat.label}
+                        <div style={{fontSize:9,color:form.category===cat.id?cat.color:"#555",marginTop:2}}>{cat.account} / {cat.taxRate}%</div>
                       </button>
                     ))}
                   </div>
                 </div>
               )}
 
-              {[{label:"日付",key:"date",type:"date"},{label:"摘要（店名・内容）",key:"description",type:"text",placeholder:"例：肉、材料費など"},{label:"金額（円）",key:"amount",type:"number",placeholder:"例：1500"}].map(field => (
+              {form.type==="expense" && (
+                <div style={{display:"flex",gap:8,marginBottom:16}}>
+                  <div style={{flex:1}}>
+                    <label style={{display:"block",fontSize:11,color:"#666",marginBottom:5}}>勘定科目</label>
+                    <select value={form.account} onChange={e => setForm(f => ({...f,account:e.target.value}))}
+                      style={{width:"100%",padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
+                      {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+                    </select>
+                  </div>
+                  <div style={{width:100}}>
+                    <label style={{display:"block",fontSize:11,color:"#666",marginBottom:5}}>税率</label>
+                    <select value={form.taxRate} onChange={e => setForm(f => ({...f,taxRate:parseInt(e.target.value)}))}
+                      style={{width:"100%",padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
+                      <option value={8}>8%</option>
+                      <option value={10}>10%</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {[{label:"日付",key:"date",type:"date"},{label:"摘要（内容）",key:"description",type:"text",placeholder:"例：肉、材料費など"},{label:"金額（円）",key:"amount",type:"number",placeholder:"例：1500"}].map(field => (
                 <div key={field.key} style={{marginBottom:14}}>
                   <label style={{display:"block",fontSize:11,color:"#666",marginBottom:5}}>{field.label}</label>
                   <input type={field.type} value={form[field.key]} placeholder={field.placeholder} onChange={e => setForm(f => ({...f,[field.key]:e.target.value}))}
@@ -516,7 +537,7 @@ function App() {
 
               <div style={{display:"flex",gap:10,marginTop:8}}>
                 {editingId && (
-                  <button onClick={() => { setEditingId(null); setCurrentReceiptImage(null); setSplitMode(false); setForm({date:todayStr(),description:"",amount:"",type:"expense",category:"terra",staff:staff[0]||"工藤"}); }}
+                  <button onClick={() => { setEditingId(null); setCurrentReceiptImage(null); setSplitMode(false); resetForm(); }}
                     style={{flex:1,padding:"12px 0",borderRadius:8,border:"1px solid #333",background:"none",color:"#888",cursor:"pointer",fontSize:14}}>キャンセル</button>
                 )}
                 <button onClick={handleSubmit} style={{flex:2,padding:"13px 0",borderRadius:8,border:"none",background:"linear-gradient(135deg,#f5c842,#e8a820)",color:"#111",fontWeight:700,fontSize:15,cursor:"pointer"}}>
@@ -530,7 +551,7 @@ function App() {
                 </button>
               )}
               {splitMode && (
-                <button onClick={() => { setSplitMode(false); setCurrentReceiptImage(null); setCaptureResult(null); setForm({date:todayStr(),description:"",amount:"",type:"expense",category:"terra",staff:staff[0]||"工藤"}); setView("ledger"); }} style={{width:"100%",marginTop:10,padding:"11px 0",borderRadius:8,border:"1px solid #5dc98a40",background:"rgba(93,201,138,0.06)",color:"#5dc98a",fontSize:13,cursor:"pointer",fontWeight:500}}>
+                <button onClick={() => { setSplitMode(false); setCurrentReceiptImage(null); resetForm(); setView("ledger"); }} style={{width:"100%",marginTop:10,padding:"11px 0",borderRadius:8,border:"1px solid #5dc98a40",background:"rgba(93,201,138,0.06)",color:"#5dc98a",fontSize:13,cursor:"pointer",fontWeight:500}}>
                   ✅ 分割登録を完了して出納帳へ
                 </button>
               )}
@@ -554,7 +575,7 @@ function App() {
                   <div key={s} style={{display:"flex",alignItems:"center",gap:6,background:"#1e1e1e",borderRadius:20,padding:"6px 12px"}}>
                     <span style={{fontSize:13,color:"#ddd"}}>{s}</span>
                     {staff.length>1 && (
-                      <button onClick={() => { const ns=staff.filter(n=>n!==s); setStaff(ns); saveData(null,null,ns); }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:14,lineHeight:1}}>✕</button>
+                      <button onClick={() => { const ns=staff.filter(n=>n!==s); setStaff(ns); saveSettings(null,ns,null); }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:14}}>✕</button>
                     )}
                   </div>
                 ))}
@@ -568,9 +589,63 @@ function App() {
                   if (staff.includes(name)) return showToast("既に存在します","error");
                   const ns = [...staff, name];
                   setStaff(ns);
-                  saveData(null,null,ns);
+                  saveSettings(null,ns,null);
                   setNewStaffName("");
                   showToast(name+"を追加しました");
+                }} style={{padding:"10px 16px",borderRadius:8,border:"none",background:"#f5c842",color:"#111",fontWeight:700,cursor:"pointer",fontSize:13}}>追加</button>
+              </div>
+            </div>
+
+            <div style={{background:"#161616",borderRadius:12,padding:20,border:"1px solid #2a2a2a",marginBottom:16}}>
+              <div style={{fontSize:13,color:"#888",marginBottom:12}}>カテゴリ管理</div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+                {categories.map(cat => (
+                  <div key={cat.id} style={{display:"flex",alignItems:"center",gap:8,background:"#1e1e1e",borderRadius:10,padding:"10px 12px"}}>
+                    <span style={{fontSize:18}}>{cat.emoji}</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:13,color:"#ddd"}}>{cat.label}</div>
+                      <div style={{fontSize:10,color:"#666",marginTop:2}}>{cat.account} / {cat.taxRate}%</div>
+                    </div>
+                    <div style={{width:14,height:14,borderRadius:"50%",background:cat.color}}></div>
+                    {categories.length>1 && (
+                      <button onClick={() => {
+                        const nc = categories.filter(c => c.id !== cat.id);
+                        setCategories(nc);
+                        saveSettings(null,null,nc);
+                        showToast(cat.label+"を削除しました");
+                      }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:16}}>🗑️</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{fontSize:12,color:"#666",marginBottom:8}}>新しいカテゴリを追加</div>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <input value={newCatEmoji} onChange={e => setNewCatEmoji(e.target.value)} placeholder="絵"
+                  style={{width:50,padding:"10px 6px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:18,outline:"none",textAlign:"center"}} />
+                <input value={newCatLabel} onChange={e => setNewCatLabel(e.target.value)} placeholder="カテゴリ名"
+                  style={{flex:1,padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:14,outline:"none"}} />
+              </div>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <select value={newCatAccount} onChange={e => setNewCatAccount(e.target.value)}
+                  style={{flex:1,padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
+                  {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+                </select>
+                <select value={newCatTax} onChange={e => setNewCatTax(parseInt(e.target.value))}
+                  style={{width:80,padding:"10px 8px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
+                  <option value={8}>8%</option>
+                  <option value={10}>10%</option>
+                </select>
+                <button onClick={() => {
+                  const label = newCatLabel.trim();
+                  if (!label) return showToast("名前を入力してください","error");
+                  const id = "cat_" + Date.now();
+                  const color = COLORS[categories.length % COLORS.length];
+                  const nc = [...categories, { id, label, emoji: newCatEmoji||"📋", color, taxRate: newCatTax, account: newCatAccount }];
+                  setCategories(nc);
+                  saveSettings(null,null,nc);
+                  setNewCatLabel("");
+                  setNewCatEmoji("📋");
+                  showToast(label+"を追加しました");
                 }} style={{padding:"10px 16px",borderRadius:8,border:"none",background:"#f5c842",color:"#111",fontWeight:700,cursor:"pointer",fontSize:13}}>追加</button>
               </div>
             </div>
@@ -581,7 +656,7 @@ function App() {
                 <div style={{fontSize:13}}>明細件数</div>
                 <div style={{fontFamily:"monospace",color:"#f5c842",fontSize:18,fontWeight:700}}>{entries.length}件</div>
               </div>
-              <button onClick={() => { if (window.confirm("すべての明細を削除しますか？")) { setEntries([]); saveData([],null,null); showToast("全データを削除しました"); } }}
+              <button onClick={async () => { if (window.confirm("すべての明細を削除しますか？")) { await supabase.from("entries").delete().neq("id","00000000-0000-0000-0000-000000000000"); await loadEntries(); showToast("全データを削除しました"); } }}
                 style={{marginTop:14,width:"100%",padding:"11px 0",borderRadius:8,border:"1px solid #c0392b40",background:"rgba(192,57,43,0.08)",color:"#e07070",cursor:"pointer",fontSize:13,fontWeight:500}}>🗑️ 全データを削除</button>
             </div>
           </div>
