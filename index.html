@@ -101,7 +101,7 @@ function App() {
   const loadEntries = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.from("entries").select("*").order("date", { ascending: true }).limit(1000);
+      const { data, error } = await supabase.from("entries").select("id,date,description,amount,type,category,staff,tax_rate,account,created_at").order("date", { ascending: true }).limit(1000);
       if (error) throw error;
       setEntries(data || []);
     } catch (e) {
