@@ -31,6 +31,10 @@ const SUPABASE_URL = "https://zimvamllpzcgtnvuvpoq.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InppbXZhbWxscHpjZ3RudnV2cG9xIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg3NjE0MzcsImV4cCI6MjA5NDMzNzQzN30.m_TCuZPmyotEGRqKByKbCs-Y0L5_2i_fq1iQkckPm1s";
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// ── ここだけ変更: Storage バケット名 ──────────────────────────────
+const STORAGE_BUCKET = "receipts";
+// ─────────────────────────────────────────────────────────────────
+
 const SETTINGS_KEY = "petty_cash_settings_v1";
 
 const formatCurrency = (n) =>
@@ -44,17 +48,17 @@ const formatDate = (d) => {
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 const DEFAULT_CATEGORIES = [
-  { id: "terra",    label: "テラミート",         emoji: "🥩", color: "#d95f5f", taxRate: 8,  account: "仕入れ" },
-  { id: "fresh",    label: "フレッシュバザール",  emoji: "🛒", color: "#5cb85c", taxRate: 8,  account: "仕入れ" },
-  { id: "hellos",   label: "ハローズ",            emoji: "🏪", color: "#5b9bd5", taxRate: 8,  account: "仕入れ" },
-  { id: "costco",   label: "コストコ",            emoji: "🏬", color: "#1a5276", taxRate: 8,  account: "仕入れ" },
-  { id: "nafco",    label: "ナフコ",              emoji: "🔧", color: "#e8a820", taxRate: 10, account: "消耗品" },
-  { id: "juntendo", label: "ジュンテンドー",      emoji: "🏠", color: "#9b59b6", taxRate: 10, account: "修繕費" },
-  { id: "komeri",   label: "コメリ",              emoji: "🌱", color: "#27ae60", taxRate: 10, account: "修繕費" },
-  { id: "sanko",    label: "三功商会",            emoji: "🏭", color: "#e67e22", taxRate: 10, account: "修繕費" },
-  { id: "water",    label: "上下水道料金",        emoji: "💧", color: "#3498db", taxRate: 10, account: "水道光熱費" },
-  { id: "cake",     label: "ケーキ",              emoji: "🎂", color: "#e91e8c", taxRate: 8,  account: "仕入れ" },
-  { id: "other",    label: "その他",              emoji: "📋", color: "#888",    taxRate: 10, account: "消耗品" },
+  { id: "terra",    label: "テラミート",       emoji: "🥩", color: "#d95f5f", taxRate: 8,  account: "仕入れ" },
+  { id: "fresh",    label: "フレッシュバザール", emoji: "🛒", color: "#5cb85c", taxRate: 8,  account: "仕入れ" },
+  { id: "hellos",   label: "ハローズ",          emoji: "🏪", color: "#5b9bd5", taxRate: 8,  account: "仕入れ" },
+  { id: "costco",   label: "コストコ",          emoji: "🏬", color: "#1a5276", taxRate: 8,  account: "仕入れ" },
+  { id: "nafco",    label: "ナフコ",            emoji: "🔧", color: "#e8a820", taxRate: 10, account: "消耗品" },
+  { id: "juntendo", label: "ジュンテンドー",    emoji: "🏠", color: "#9b59b6", taxRate: 10, account: "修繕費" },
+  { id: "komeri",   label: "コメリ",            emoji: "🌱", color: "#27ae60", taxRate: 10, account: "修繕費" },
+  { id: "sanko",    label: "三功商会",          emoji: "🏭", color: "#e67e22", taxRate: 10, account: "修繕費" },
+  { id: "water",    label: "上下水道料金",      emoji: "💧", color: "#3498db", taxRate: 10, account: "水道光熱費" },
+  { id: "cake",     label: "ケーキ",            emoji: "🎂", color: "#e91e8c", taxRate: 8,  account: "仕入れ" },
+  { id: "other",    label: "その他",            emoji: "📋", color: "#888",    taxRate: 10, account: "消耗品" },
 ];
 
 const COLORS = ["#d95f5f","#5cb85c","#5b9bd5","#e8a820","#9b59b6","#27ae60","#e67e22","#3498db","#e91e8c","#888","#f39c12","#1abc9c"];
@@ -69,7 +73,10 @@ function App() {
   const [capturing, setCapturing] = useState(false);
   const [toast, setToast] = useState(null);
   const [initBalInput, setInitBalInput] = useState("");
+  // currentReceiptImage: プレビュー用（Base64 or URL）
   const [currentReceiptImage, setCurrentReceiptImage] = useState(null);
+  // currentReceiptUrl: DBに保存済みのStorage URL
+  const [currentReceiptUrl, setCurrentReceiptUrl] = useState(null);
   const [receiptModal, setReceiptModal] = useState(null);
   const [splitMode, setSplitMode] = useState(false);
   const [filterCategory, setFilterCategory] = useState("all");
@@ -101,7 +108,12 @@ function App() {
   const loadEntries = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.from("entries").select("id,date,description,amount,type,category,staff,tax_rate,account,created_at").order("date", { ascending: true }).limit(1000);
+      // receipt_image列も取得する（URLが入っているだけなので軽い）
+      const { data, error } = await supabase
+        .from("entries")
+        .select("id,date,description,amount,type,category,staff,tax_rate,account,receipt_image,created_at")
+        .order("date", { ascending: true })
+        .limit(1000);
       if (error) throw error;
       setEntries(data || []);
     } catch (e) {
@@ -155,6 +167,21 @@ function App() {
     }
   };
 
+  // ── レシート写真をStorageにアップロードしてURLを返す ──────────────
+  const uploadReceiptToStorage = async (file) => {
+    const ext = file.name.split(".").pop() || "jpg";
+    const fileName = `receipt_${Date.now()}.${ext}`;
+    const { data, error } = await supabase.storage
+      .from(STORAGE_BUCKET)
+      .upload(fileName, file, { contentType: file.type || "image/jpeg", upsert: false });
+    if (error) throw error;
+    const { data: urlData } = supabase.storage
+      .from(STORAGE_BUCKET)
+      .getPublicUrl(data.path);
+    return urlData.publicUrl;
+  };
+  // ────────────────────────────────────────────────────────────────
+
   const handleSubmit = async () => {
     if (!form.date || !form.description || !form.amount) return showToast("全項目を入力してください", "error");
     const amt = parseInt(form.amount.replace(/,/g, ""), 10);
@@ -169,7 +196,8 @@ function App() {
       staff: form.staff,
       tax_rate: form.type === "income" ? null : form.taxRate,
       account: form.type === "income" ? null : form.account,
-      receipt_image: currentReceiptImage || null,
+      // currentReceiptUrl に Storage URL が入っていればそれを使う
+      receipt_image: currentReceiptUrl || null,
     };
 
     if (editingId) {
@@ -178,6 +206,7 @@ function App() {
       showToast("更新しました");
       setEditingId(null);
       setCurrentReceiptImage(null);
+      setCurrentReceiptUrl(null);
       setSplitMode(false);
       resetForm();
       setView("ledger");
@@ -189,6 +218,7 @@ function App() {
         setForm(f => ({ ...f, description: "", amount: "" }));
       } else {
         setCurrentReceiptImage(null);
+        setCurrentReceiptUrl(null);
         resetForm();
         setView("ledger");
       }
@@ -198,7 +228,9 @@ function App() {
 
   const handleEdit = (entry) => {
     setForm({ date: entry.date, description: entry.description, amount: String(entry.amount), type: entry.type, category: entry.category || "other", staff: entry.staff || staff[0] || "工藤", taxRate: entry.tax_rate || 10, account: entry.account || "消耗品" });
+    // 既存レコードのreceipt_imageはURLなのでプレビューにも使う
     setCurrentReceiptImage(entry.receipt_image || null);
+    setCurrentReceiptUrl(entry.receipt_image || null);
     setEditingId(entry.id);
     setSplitMode(false);
     setView("capture");
@@ -212,24 +244,33 @@ function App() {
     await loadEntries();
   };
 
+  // ── 写真選択時: プレビュー表示 + Storageへアップロード ───────────
   const handleCapture = async (file) => {
     if (!file) return;
     setCapturing(true);
     try {
+      // まずローカルプレビュー用のBase64を作る（即時表示）
       const base64 = await new Promise((res, rej) => {
         const r = new FileReader();
-        r.onload = () => res(r.result.split(",")[1]);
+        r.onload = () => res(r.result);
         r.onerror = rej;
         r.readAsDataURL(file);
       });
-      const mediaType = file.type || "image/jpeg";
-      setCurrentReceiptImage("data:" + mediaType + ";base64," + base64);
-      showToast("写真を保存しました。手動で入力してください");
-    } catch {
-      showToast("写真の読み込みに失敗しました", "error");
+      setCurrentReceiptImage(base64); // プレビュー用
+
+      // Storageへアップロード
+      showToast("写真をアップロード中...");
+      const publicUrl = await uploadReceiptToStorage(file);
+      setCurrentReceiptUrl(publicUrl); // DB保存用URL
+      showToast("写真をアップロードしました！");
+    } catch (err) {
+      showToast("写真のアップロードに失敗しました: " + err.message, "error");
+      setCurrentReceiptImage(null);
+      setCurrentReceiptUrl(null);
     }
     setCapturing(false);
   };
+  // ────────────────────────────────────────────────────────────────
 
   const saveInitialBalance = () => {
     const v = parseInt(initBalInput.replace(/,/g, ""), 10);
@@ -243,17 +284,17 @@ function App() {
   const handleOpenPdf = () => {
     const today = new Date();
     const dateStr = today.getFullYear() + "年" + (today.getMonth()+1) + "月" + today.getDate() + "日";
+
     let runBal = initialBalance;
     const rowsForPrint = sorted.map(e => {
       runBal = e.type === "income" ? runBal + e.amount : runBal - e.amount;
       return { ...e, runningBalance: runBal };
     });
-    const totalIncome = entries.filter(e => e.type === "income").reduce((a, e) => a + e.amount, 0);
+
+    const totalIncome  = entries.filter(e => e.type === "income").reduce((a, e) => a + e.amount, 0);
     const totalExpense = entries.filter(e => e.type === "expense").reduce((a, e) => a + e.amount, 0);
-
-    const tax8Total = entries.filter(e => e.type === "expense" && e.tax_rate === 8).reduce((a, e) => a + e.amount, 0);
-    const tax10Total = entries.filter(e => e.type === "expense" && e.tax_rate === 10).reduce((a, e) => a + e.amount, 0);
-
+    const tax8Total    = entries.filter(e => e.type === "expense" && e.tax_rate === 8).reduce((a, e) => a + e.amount, 0);
+    const tax10Total   = entries.filter(e => e.type === "expense" && e.tax_rate === 10).reduce((a, e) => a + e.amount, 0);
     const accountTotals = ACCOUNTS.map(acc => {
       const total = entries.filter(e => e.type === "expense" && e.account === acc).reduce((a, e) => a + e.amount, 0);
       return { acc, total };
@@ -272,7 +313,7 @@ function App() {
 
     const accountRows = accountTotals.map(a => "<tr><td>" + a.acc + "</td><td style='text-align:right;font-weight:600'>" + formatCurrency(a.total) + "</td></tr>").join("");
 
-    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>小口現金出納帳 " + dateStr + "</title><style>body{font-family:'Hiragino Sans',sans-serif;font-size:11px;color:#111;margin:16px}h1{font-size:16px;margin-bottom:4px}.sub{color:#666;font-size:10px;margin-bottom:12px}.summary{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}.sbox{border:1px solid #ddd;border-radius:6px;padding:6px 8px;flex:1;min-width:60px;text-align:center}.sbox .l{font-size:9px;color:#888}.sbox .v{font-size:12px;font-weight:700;margin-top:2px}table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:10px}th{background:#222;color:#fff;padding:5px 4px;text-align:left}td{padding:5px 4px;border-bottom:1px solid #eee}h2{font-size:12px;margin:12px 0 6px;border-left:3px solid #e8a820;padding-left:6px;color:#444}.tax-box{display:flex;gap:12px;margin-bottom:12px}.tbox{border:1px solid #ddd;border-radius:6px;padding:8px 12px;flex:1;text-align:center}.tbox .l{font-size:9px;color:#888}.tbox .v{font-size:13px;font-weight:700;margin-top:2px;color:#a00}@media print{body{margin:8px}}</style></head><body><h1>小口現金 出納帳</h1><div class='sub'>出力日：" + dateStr + "　現在残高：" + formatCurrency(balance) + "</div><div class='summary'><div class='sbox'><div class='l'>前残高</div><div class='v'>" + formatCurrency(initialBalance) + "</div></div><div class='sbox'><div class='l'>総入金</div><div class='v' style='color:#2a7a2a'>" + formatCurrency(totalIncome) + "</div></div><div class='sbox'><div class='l'>総出金</div><div class='v' style='color:#a00'>" + formatCurrency(totalExpense) + "</div></div><div class='sbox'><div class='l'>現在残高</div><div class='v' style='color:#b8860b'>" + formatCurrency(balance) + "</div></div></div><h2>消費税別合計</h2><div class='tax-box'><div class='tbox'><div class='l'>8%対象合計</div><div class='v'>" + formatCurrency(tax8Total) + "</div></div><div class='tbox'><div class='l'>10%対象合計</div><div class='v'>" + formatCurrency(tax10Total) + "</div></div></div><h2>勘定科目別合計</h2><table><thead><tr><th>科目</th><th style='text-align:right'>合計</th></tr></thead><tbody>" + accountRows + "</tbody></table><h2>明細</h2><table><thead><tr><th>日付</th><th>担当</th><th>摘要</th><th>店名</th><th>科目</th><th style='text-align:center'>税率</th><th style='text-align:right'>入金</th><th style='text-align:right'>出金</th><th style='text-align:right'>残高</th></tr></thead><tbody><tr><td>—</td><td></td><td style='color:#888;font-style:italic'>前残高</td><td></td><td></td><td></td><td></td><td></td><td style='text-align:right;font-weight:600'>" + formatCurrency(initialBalance) + "</td></tr>" + tableRows + "</tbody></table><h2>店名別出金内訳</h2><table><thead><tr><th>店名</th><th>科目</th><th style='text-align:center'>税率</th><th style='text-align:right'>合計</th></tr></thead><tbody>" + catRows + "</tbody></table></body></html>";
+    const html = "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>小口現金出納帳 " + dateStr + "</title><style>body{font-family:'Hiragino Sans',sans-serif;font-size:11px;color:#111;margin:16px}h1{font-size:16px;margin-bottom:4px}.sub{color:#666;font-size:10px;margin-bottom:12px}.summary{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}.sbox{border:1px solid #ddd;border-radius:6px;padding:6px 8px;flex:1;min-width:60px;text-align:center}.sbox .l{font-size:9px;color:#888}.sbox .v{font-size:12px;font-weight:700;margin-top:2px}table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:10px}th{background:#222;color:#fff;padding:5px 4px;text-align:left}td{padding:5px 4px;border-bottom:1px solid #eee}h2{font-size:12px;margin:12px 0 6px;border-left:3px solid #e8a820;padding-left:6px;color:#444}.tax-box{display:flex;gap:12px;margin-bottom:12px}.tbox{border:1px solid #ddd;border-radius:6px;padding:8px 12px;flex:1;text-align:center}.tbox .l{font-size:9px;color:#888}.tbox .v{font-size:13px;font-weight:700;margin-top:2px;color:#a00}@media print{body{margin:8px}}</style></head><body><h1>小口現金 出納帳</h1><div class='sub'>出力日：" + dateStr + " 現在残高：" + formatCurrency(balance) + "</div><div class='summary'><div class='sbox'><div class='l'>前残高</div><div class='v'>" + formatCurrency(initialBalance) + "</div></div><div class='sbox'><div class='l'>総入金</div><div class='v' style='color:#2a7a2a'>" + formatCurrency(totalIncome) + "</div></div><div class='sbox'><div class='l'>総出金</div><div class='v' style='color:#a00'>" + formatCurrency(totalExpense) + "</div></div><div class='sbox'><div class='l'>現在残高</div><div class='v' style='color:#b8860b'>" + formatCurrency(balance) + "</div></div></div><h2>消費税別合計</h2><div class='tax-box'><div class='tbox'><div class='l'>8%対象合計</div><div class='v'>" + formatCurrency(tax8Total) + "</div></div><div class='tbox'><div class='l'>10%対象合計</div><div class='v'>" + formatCurrency(tax10Total) + "</div></div></div><h2>勘定科目別合計</h2><table><thead><tr><th>科目</th><th style='text-align:right'>合計</th></tr></thead><tbody>" + accountRows + "</tbody></table><h2>明細</h2><table><thead><tr><th>日付</th><th>担当</th><th>摘要</th><th>店名</th><th>科目</th><th style='text-align:center'>税率</th><th style='text-align:right'>入金</th><th style='text-align:right'>出金</th><th style='text-align:right'>残高</th></tr></thead><tbody><tr><td>—</td><td></td><td style='color:#888;font-style:italic'>前残高</td><td></td><td></td><td></td><td></td><td></td><td style='text-align:right;font-weight:600'>" + formatCurrency(initialBalance) + "</td></tr>" + tableRows + "</tbody></table><h2>店名別出金内訳</h2><table><thead><tr><th>店名</th><th>科目</th><th style='text-align:center'>税率</th><th style='text-align:right'>合計</th></tr></thead><tbody>" + catRows + "</tbody></table></body></html>";
 
     const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -352,57 +393,61 @@ function App() {
                 </div>
 
                 <div style={{overflowX:"auto"}}>
-                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:500}}>
-                  <thead>
-                    <tr style={{color:"#666",borderBottom:"1px solid #2a2a2a"}}>
-                      <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>日付</th>
-                      <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>担当</th>
-                      <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>摘要</th>
-                      <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>店名</th>
-                      <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>入金</th>
-                      <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>出金</th>
-                      <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>残高</th>
-                      <th style={{width:60}}></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr style={{borderBottom:"1px solid #222"}}>
-                      <td style={{padding:"9px 6px",color:"#555",fontSize:12}}>—</td>
-                      <td></td>
-                      <td style={{padding:"9px 6px",color:"#666",fontStyle:"italic"}}>前残高</td>
-                      <td></td><td></td><td></td>
-                      <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#aaa"}}>{formatCurrency(initialBalance)}</td>
-                      <td></td>
-                    </tr>
-                    {filteredRows.map((e) => {
-                      const cat = categories.find(c=>c.id===e.category)||categories[categories.length-1];
-                      return (
-                        <tr key={e.id} className="row-hover" style={{borderBottom:"1px solid #1e1e1e"}}>
-                          <td style={{padding:"9px 6px",color:"#888",fontSize:11,whiteSpace:"nowrap"}}>{formatDate(e.date)}</td>
-                          <td style={{padding:"9px 4px",fontSize:11,color:"#aaa",whiteSpace:"nowrap"}}>{e.staff||"—"}</td>
-                          <td style={{padding:"9px 6px",color:"#ddd",maxWidth:80,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.description}</td>
-                          <td style={{padding:"9px 4px"}}>
-                            {e.type==="income" ? (
-                              <span style={{display:"inline-block",fontSize:10,padding:"2px 5px",borderRadius:10,background:"rgba(93,201,138,0.15)",color:"#5dc98a",whiteSpace:"nowrap",fontWeight:600}}>💰 入金</span>
-                            ) : (
-                              <span style={{display:"inline-block",fontSize:10,padding:"2px 5px",borderRadius:10,background:cat?(cat.color+"22"):"#888",color:cat?cat.color:"#888",whiteSpace:"nowrap",fontWeight:600}}>{cat?cat.emoji:""} {cat?cat.label:""}</span>
-                            )}
-                          </td>
-                          <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#5dc98a",fontSize:12}}>{e.type==="income"?formatCurrency(e.amount):""}</td>
-                          <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#e07070",fontSize:12}}>{e.type==="expense"?formatCurrency(e.amount):""}</td>
-                          <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:e.runningBalance>=0?"#f0ede8":"#e05555",fontSize:12}}>{formatCurrency(e.runningBalance)}</td>
-                          <td style={{padding:"9px 4px",textAlign:"right"}}>
-                            <div style={{display:"flex",gap:2}}>
-                              {e.receipt_image && <button className="btn-icon" onClick={() => setReceiptModal(e.receipt_image)} style={{background:"none",border:"none",color:"#f5c842",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🧾</button>}
-                              <button className="btn-icon" onClick={() => handleEdit(e)} style={{background:"none",border:"none",color:"#666",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>✏️</button>
-                              <button className="btn-icon" onClick={() => handleDelete(e.id)} style={{background:"none",border:"none",color:"#666",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🗑️</button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:500}}>
+                    <thead>
+                      <tr style={{color:"#666",borderBottom:"1px solid #2a2a2a"}}>
+                        <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>日付</th>
+                        <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>担当</th>
+                        <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>摘要</th>
+                        <th style={{textAlign:"left",padding:"8px 6px",fontWeight:500,fontSize:11}}>店名</th>
+                        <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>入金</th>
+                        <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>出金</th>
+                        <th style={{textAlign:"right",padding:"8px 6px",fontWeight:500,fontSize:11}}>残高</th>
+                        <th style={{width:60}}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr style={{borderBottom:"1px solid #222"}}>
+                        <td style={{padding:"9px 6px",color:"#555",fontSize:12}}>—</td>
+                        <td></td>
+                        <td style={{padding:"9px 6px",color:"#666",fontStyle:"italic"}}>前残高</td>
+                        <td></td><td></td><td></td>
+                        <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#aaa"}}>{formatCurrency(initialBalance)}</td>
+                        <td></td>
+                      </tr>
+                      {filteredRows.map((e) => {
+                        const cat = categories.find(c=>c.id===e.category)||categories[categories.length-1];
+                        return (
+                          <tr key={e.id} className="row-hover" style={{borderBottom:"1px solid #1e1e1e"}}>
+                            <td style={{padding:"9px 6px",color:"#888",fontSize:11,whiteSpace:"nowrap"}}>{formatDate(e.date)}</td>
+                            <td style={{padding:"9px 4px",fontSize:11,color:"#aaa",whiteSpace:"nowrap"}}>{e.staff||"—"}</td>
+                            <td style={{padding:"9px 6px",color:"#ddd",maxWidth:80,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.description}</td>
+                            <td style={{padding:"9px 4px"}}>
+                              {e.type==="income" ? (
+                                <span style={{display:"inline-block",fontSize:10,padding:"2px 5px",borderRadius:10,background:"rgba(93,201,138,0.15)",color:"#5dc98a",whiteSpace:"nowrap",fontWeight:600}}>💰 入金</span>
+                              ) : (
+                                <span style={{display:"inline-block",fontSize:10,padding:"2px 5px",borderRadius:10,background:cat?(cat.color+"22"):"#888",color:cat?cat.color:"#888",whiteSpace:"nowrap",fontWeight:600}}>{cat?cat.emoji:""} {cat?cat.label:""}</span>
+                              )}
+                            </td>
+                            <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#5dc98a",fontSize:12}}>{e.type==="income"?formatCurrency(e.amount):""}</td>
+                            <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:"#e07070",fontSize:12}}>{e.type==="expense"?formatCurrency(e.amount):""}</td>
+                            <td style={{padding:"9px 6px",textAlign:"right",fontFamily:"monospace",color:e.runningBalance>=0?"#f0ede8":"#e05555",fontSize:12}}>{formatCurrency(e.runningBalance)}</td>
+                            <td style={{padding:"9px 4px",textAlign:"right"}}>
+                              <div style={{display:"flex",gap:2}}>
+                                {/* receipt_image に値があれば🧾ボタン表示（Storage URL） */}
+                                {e.receipt_image && (
+                                  <button className="btn-icon" onClick={() => setReceiptModal(e.receipt_image)}
+                                    style={{background:"none",border:"none",color:"#f5c842",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🧾</button>
+                                )}
+                                <button className="btn-icon" onClick={() => handleEdit(e)} style={{background:"none",border:"none",color:"#666",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>✏️</button>
+                                <button className="btn-icon" onClick={() => handleDelete(e.id)} style={{background:"none",border:"none",color:"#666",cursor:"pointer",padding:"3px 5px",borderRadius:4,fontSize:13}}>🗑️</button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
 
                 <div style={{display:"flex",gap:12,padding:"16px 0 8px",borderTop:"1px solid #2a2a2a",marginTop:8}}>
@@ -456,9 +501,9 @@ function App() {
             <div onClick={() => fileRef.current?.click()} style={{border:"2px dashed #333",borderRadius:12,padding:"28px 20px",textAlign:"center",cursor:"pointer",marginBottom:20,background:capturing?"rgba(245,200,66,0.05)":"#141414"}}>
               <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e => handleCapture(e.target.files[0])} />
               {capturing ? (
-                <div><div style={{fontSize:28,marginBottom:8}}>⏳</div><div style={{color:"#f5c842",fontSize:13}}>処理中...</div></div>
+                <div><div style={{fontSize:28,marginBottom:8}}>⏳</div><div style={{color:"#f5c842",fontSize:13}}>アップロード中...</div></div>
               ) : currentReceiptImage ? (
-                <div><div style={{fontSize:24,marginBottom:6}}>✅</div><div style={{color:"#5dc98a",fontSize:13}}>写真保存済み！下欄を入力してください</div></div>
+                <div><div style={{fontSize:24,marginBottom:6}}>✅</div><div style={{color:"#5dc98a",fontSize:13}}>写真アップロード済み！下欄を入力してください</div></div>
               ) : (
                 <div><div style={{fontSize:32,marginBottom:8}}>📷</div><div style={{color:"#aaa",fontSize:14}}>レシートをタップしてアップロード</div></div>
               )}
@@ -471,7 +516,7 @@ function App() {
                   <div style={{fontSize:12,color:"#aaa"}}>レシート保存済み 🧾</div>
                   <div style={{fontSize:11,color:"#555",marginTop:2}}>タップして拡大確認</div>
                 </div>
-                <button onClick={() => { setCurrentReceiptImage(null); setSplitMode(false); }} style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:18}}>✕</button>
+                <button onClick={() => { setCurrentReceiptImage(null); setCurrentReceiptUrl(null); setSplitMode(false); }} style={{background:"none",border:"none",color:"#555",cursor:"pointer",fontSize:18}}>✕</button>
               </div>
             )}
 
@@ -540,7 +585,7 @@ function App() {
 
               <div style={{display:"flex",gap:10,marginTop:8}}>
                 {editingId && (
-                  <button onClick={() => { setEditingId(null); setCurrentReceiptImage(null); setSplitMode(false); resetForm(); }}
+                  <button onClick={() => { setEditingId(null); setCurrentReceiptImage(null); setCurrentReceiptUrl(null); setSplitMode(false); resetForm(); }}
                     style={{flex:1,padding:"12px 0",borderRadius:8,border:"1px solid #333",background:"none",color:"#888",cursor:"pointer",fontSize:14}}>キャンセル</button>
                 )}
                 <button onClick={handleSubmit} style={{flex:2,padding:"13px 0",borderRadius:8,border:"none",background:"linear-gradient(135deg,#f5c842,#e8a820)",color:"#111",fontWeight:700,fontSize:15,cursor:"pointer"}}>
@@ -554,7 +599,7 @@ function App() {
                 </button>
               )}
               {splitMode && (
-                <button onClick={() => { setSplitMode(false); setCurrentReceiptImage(null); resetForm(); setView("ledger"); }} style={{width:"100%",marginTop:10,padding:"11px 0",borderRadius:8,border:"1px solid #5dc98a40",background:"rgba(93,201,138,0.06)",color:"#5dc98a",fontSize:13,cursor:"pointer",fontWeight:500}}>
+                <button onClick={() => { setSplitMode(false); setCurrentReceiptImage(null); setCurrentReceiptUrl(null); resetForm(); setView("ledger"); }} style={{width:"100%",marginTop:10,padding:"11px 0",borderRadius:8,border:"1px solid #5dc98a40",background:"rgba(93,201,138,0.06)",color:"#5dc98a",fontSize:13,cursor:"pointer",fontWeight:500}}>
                   ✅ 分割登録を完了して出納帳へ
                 </button>
               )}
@@ -664,6 +709,7 @@ function App() {
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
