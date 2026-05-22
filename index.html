@@ -62,7 +62,8 @@ const DEFAULT_CATEGORIES = [
 ];
 
 const COLORS = ["#d95f5f","#5cb85c","#5b9bd5","#e8a820","#9b59b6","#27ae60","#e67e22","#3498db","#e91e8c","#888","#f39c12","#1abc9c"];
-const ACCOUNTS = ["仕入れ", "消耗品", "修繕費", "水道光熱費", "その他"];
+const DEFAULT_ACCOUNTS = ["仕入れ", "消耗品", "修繕費", "水道光熱費", "その他"];
+const DEFAULT_TAX_RATES = [8, 10];
 
 function App() {
   const [entries, setEntries] = useState([]);
@@ -88,6 +89,10 @@ function App() {
   const [newCatEmoji, setNewCatEmoji] = useState("📋");
   const [newCatTax, setNewCatTax] = useState(10);
   const [newCatAccount, setNewCatAccount] = useState("消耗品");
+  const [accounts, setAccounts] = useState(DEFAULT_ACCOUNTS);
+  const [newAccountName, setNewAccountName] = useState("");
+  const [taxRates, setTaxRates] = useState(DEFAULT_TAX_RATES);
+  const [newTaxRate, setNewTaxRate] = useState("");
   const [loading, setLoading] = useState(true);
   const fileRef = useRef();
 
@@ -101,6 +106,8 @@ function App() {
         setInitBalInput(String(data.initialBalance || 0));
         setStaff(data.staff || ["工藤", "高橋"]);
         setCategories(data.categories || DEFAULT_CATEGORIES);
+        setAccounts(data.accounts || DEFAULT_ACCOUNTS);
+        setTaxRates(data.taxRates || DEFAULT_TAX_RATES);
       }
     } catch {}
   }, []);
@@ -122,12 +129,14 @@ function App() {
     setLoading(false);
   };
 
-  const saveSettings = (newBalance, newStaff, newCats) => {
+  const saveSettings = (newBalance, newStaff, newCats, newAccounts, newTaxRates) => {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify({
         initialBalance: newBalance !== null ? newBalance : initialBalance,
         staff: newStaff !== null ? newStaff : staff,
         categories: newCats !== null ? newCats : categories,
+        accounts: newAccounts !== null ? newAccounts : accounts,
+        taxRates: newTaxRates !== null ? newTaxRates : taxRates,
       }));
     } catch {}
   };
@@ -276,7 +285,7 @@ function App() {
     const v = parseInt(initBalInput.replace(/,/g, ""), 10);
     if (isNaN(v)) return showToast("無効な金額です", "error");
     setInitialBalance(v);
-    saveSettings(v, null, null);
+    saveSettings(v, null, null, null, null);
     showToast("前残高を保存しました");
     setView("ledger");
   };
@@ -295,14 +304,14 @@ function App() {
     const totalExpense = entries.filter(e => e.type === "expense").reduce((a, e) => a + e.amount, 0);
     const tax8Total    = entries.filter(e => e.type === "expense" && e.tax_rate === 8).reduce((a, e) => a + e.amount, 0);
     const tax10Total   = entries.filter(e => e.type === "expense" && e.tax_rate === 10).reduce((a, e) => a + e.amount, 0);
-    const accountTotals = ACCOUNTS.map(acc => {
+    const accountTotals = accounts.map(acc => {
       const total = entries.filter(e => e.type === "expense" && e.account === acc).reduce((a, e) => a + e.amount, 0);
       return { acc, total };
     }).filter(a => a.total > 0);
 
     const tableRows = rowsForPrint.map((e, i) => {
       const cat = categories.find(c => c.id === e.category) || categories[categories.length-1];
-      const taxLabel = e.tax_rate ? e.tax_rate + "%" : "";
+      const taxLabel = e.tax_rate === "none" || e.tax_rate === null || e.tax_rate === undefined ? (e.tax_rate === "none" ? "対象外" : "") : e.tax_rate + "%";
       return "<tr style='background:" + (i%2===0?"#fff":"#f9f9f9") + "'><td>" + formatDate(e.date) + "</td><td>" + (e.staff||"—") + "</td><td>" + e.description + "</td><td style='color:" + (cat?cat.color:"#888") + "'>" + (e.type==="expense"?(cat?cat.emoji:"") + " " + (cat?cat.label:""):"入金") + "</td><td>" + (e.account||"") + "</td><td style='text-align:center'>" + taxLabel + "</td><td style='text-align:right;color:#2a7a2a'>" + (e.type==="income"?formatCurrency(e.amount):"") + "</td><td style='text-align:right;color:#a00'>" + (e.type==="expense"?formatCurrency(e.amount):"") + "</td><td style='text-align:right;font-weight:600'>" + formatCurrency(e.runningBalance) + "</td></tr>";
     }).join("");
 
@@ -461,22 +470,32 @@ function App() {
 
                 <div style={{background:"#141414",borderRadius:10,padding:"12px 14px",marginBottom:8,border:"1px solid #222"}}>
                   <div style={{fontSize:11,color:"#555",marginBottom:8}}>消費税別出金</div>
-                  <div style={{display:"flex",gap:8}}>
-                    {[{label:"8%対象",rate:8,color:"#5dc98a"},{label:"10%対象",rate:10,color:"#e07070"}].map(t => {
-                      const total = entries.filter(e=>e.type==="expense"&&e.tax_rate===t.rate).reduce((a,e)=>a+e.amount,0);
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {taxRates.map((r,i) => {
+                      const total = entries.filter(e=>e.type==="expense"&&e.tax_rate===r).reduce((a,e)=>a+e.amount,0);
+                      const colors = ["#5dc98a","#e07070","#f5c842","#5b9bd5","#9b59b6","#e67e22"];
                       return (
-                        <div key={t.rate} style={{flex:1,background:"#1e1e1e",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
-                          <div style={{fontSize:10,color:"#666",marginBottom:4}}>{t.label}</div>
-                          <div style={{fontSize:13,fontWeight:600,fontFamily:"monospace",color:t.color}}>{formatCurrency(total)}</div>
+                        <div key={r} style={{flex:1,minWidth:80,background:"#1e1e1e",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                          <div style={{fontSize:10,color:"#666",marginBottom:4}}>{r}%対象</div>
+                          <div style={{fontSize:13,fontWeight:600,fontFamily:"monospace",color:colors[i%colors.length]}}>{formatCurrency(total)}</div>
                         </div>
                       );
                     })}
+                    {(() => {
+                      const total = entries.filter(e=>e.type==="expense"&&(e.tax_rate==="none"||e.tax_rate===null||e.tax_rate===undefined)).reduce((a,e)=>a+e.amount,0);
+                      return total > 0 ? (
+                        <div style={{flex:1,minWidth:80,background:"#1e1e1e",borderRadius:8,padding:"10px 12px",textAlign:"center"}}>
+                          <div style={{fontSize:10,color:"#666",marginBottom:4}}>対象外</div>
+                          <div style={{fontSize:13,fontWeight:600,fontFamily:"monospace",color:"#888"}}>{formatCurrency(total)}</div>
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
                 </div>
 
                 <div style={{background:"#141414",borderRadius:10,padding:"12px 14px",marginBottom:16,border:"1px solid #222"}}>
                   <div style={{fontSize:11,color:"#555",marginBottom:8}}>勘定科目別出金</div>
-                  {ACCOUNTS.map(acc => {
+                  {accounts.map(acc => {
                     const total = entries.filter(e=>e.type==="expense"&&e.account===acc).reduce((a,e)=>a+e.amount,0);
                     if (total===0) return null;
                     return (
@@ -548,7 +567,7 @@ function App() {
                       <button key={cat.id} onClick={() => handleCategoryChange(cat.id)}
                         style={{padding:"9px 10px",borderRadius:8,cursor:"pointer",background:form.category===cat.id?cat.color+"22":"#1a1a1a",color:form.category===cat.id?cat.color:"#666",border:form.category===cat.id?"1px solid "+cat.color+"55":"1px solid #2a2a2a",fontWeight:form.category===cat.id?700:400,fontSize:13,textAlign:"left"}}>
                         <span style={{marginRight:5}}>{cat.emoji}</span>{cat.label}
-                        <div style={{fontSize:9,color:form.category===cat.id?cat.color:"#555",marginTop:2}}>{cat.account} / {cat.taxRate}%</div>
+                        <div style={{fontSize:9,color:form.category===cat.id?cat.color:"#555",marginTop:2}}>{cat.account} / {cat.taxRate==="none"?"対象外":cat.taxRate+"%"}</div>
                       </button>
                     ))}
                   </div>
@@ -561,15 +580,15 @@ function App() {
                     <label style={{display:"block",fontSize:11,color:"#666",marginBottom:5}}>勘定科目</label>
                     <select value={form.account} onChange={e => setForm(f => ({...f,account:e.target.value}))}
                       style={{width:"100%",padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
-                      {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+                      {accounts.map(a => <option key={a} value={a}>{a}</option>)}
                     </select>
                   </div>
                   <div style={{width:100}}>
                     <label style={{display:"block",fontSize:11,color:"#666",marginBottom:5}}>税率</label>
-                    <select value={form.taxRate} onChange={e => setForm(f => ({...f,taxRate:parseInt(e.target.value)}))}
+                    <select value={form.taxRate} onChange={e => setForm(f => ({...f,taxRate:e.target.value==="none"?"none":parseInt(e.target.value)}))}
                       style={{width:"100%",padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
-                      <option value={8}>8%</option>
-                      <option value={10}>10%</option>
+                      {taxRates.map(r => <option key={r} value={r}>{r}%</option>)}
+                      <option value="none">対象外</option>
                     </select>
                   </div>
                 </div>
@@ -623,7 +642,7 @@ function App() {
                   <div key={s} style={{display:"flex",alignItems:"center",gap:6,background:"#1e1e1e",borderRadius:20,padding:"6px 12px"}}>
                     <span style={{fontSize:13,color:"#ddd"}}>{s}</span>
                     {staff.length>1 && (
-                      <button onClick={() => { const ns=staff.filter(n=>n!==s); setStaff(ns); saveSettings(null,ns,null); }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:14}}>✕</button>
+                      <button onClick={() => { const ns=staff.filter(n=>n!==s); setStaff(ns); saveSettings(null,ns,null,null,null); }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:14}}>✕</button>
                     )}
                   </div>
                 ))}
@@ -637,7 +656,7 @@ function App() {
                   if (staff.includes(name)) return showToast("既に存在します","error");
                   const ns = [...staff, name];
                   setStaff(ns);
-                  saveSettings(null,ns,null);
+                  saveSettings(null,ns,null,null,null);
                   setNewStaffName("");
                   showToast(name+"を追加しました");
                 }} style={{padding:"10px 16px",borderRadius:8,border:"none",background:"#f5c842",color:"#111",fontWeight:700,cursor:"pointer",fontSize:13}}>追加</button>
@@ -652,14 +671,14 @@ function App() {
                     <span style={{fontSize:18}}>{cat.emoji}</span>
                     <div style={{flex:1}}>
                       <div style={{fontSize:13,color:"#ddd"}}>{cat.label}</div>
-                      <div style={{fontSize:10,color:"#666",marginTop:2}}>{cat.account} / {cat.taxRate}%</div>
+                      <div style={{fontSize:10,color:"#666",marginTop:2}}>{cat.account} / {cat.taxRate==="none"?"対象外":cat.taxRate+"%"}</div>
                     </div>
                     <div style={{width:14,height:14,borderRadius:"50%",background:cat.color}}></div>
                     {categories.length>1 && (
                       <button onClick={() => {
                         const nc = categories.filter(c => c.id !== cat.id);
                         setCategories(nc);
-                        saveSettings(null,null,nc);
+                        saveSettings(null,null,nc,null,null);
                         showToast(cat.label+"を削除しました");
                       }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:16}}>🗑️</button>
                     )}
@@ -676,12 +695,12 @@ function App() {
               <div style={{display:"flex",gap:8,marginBottom:8}}>
                 <select value={newCatAccount} onChange={e => setNewCatAccount(e.target.value)}
                   style={{flex:1,padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
-                  {ACCOUNTS.map(a => <option key={a} value={a}>{a}</option>)}
+                  {accounts.map(a => <option key={a} value={a}>{a}</option>)}
                 </select>
-                <select value={newCatTax} onChange={e => setNewCatTax(parseInt(e.target.value))}
-                  style={{width:80,padding:"10px 8px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
-                  <option value={8}>8%</option>
-                  <option value={10}>10%</option>
+                <select value={newCatTax} onChange={e => setNewCatTax(e.target.value==="none"?"none":parseInt(e.target.value))}
+                  style={{width:90,padding:"10px 8px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:13,outline:"none"}}>
+                  {taxRates.map(r => <option key={r} value={r}>{r}%</option>)}
+                  <option value="none">対象外</option>
                 </select>
                 <button onClick={() => {
                   const label = newCatLabel.trim();
@@ -690,10 +709,80 @@ function App() {
                   const color = COLORS[categories.length % COLORS.length];
                   const nc = [...categories, { id, label, emoji: newCatEmoji||"📋", color, taxRate: newCatTax, account: newCatAccount }];
                   setCategories(nc);
-                  saveSettings(null,null,nc);
+                  saveSettings(null,null,nc,null,null);
                   setNewCatLabel("");
                   setNewCatEmoji("📋");
                   showToast(label+"を追加しました");
+                }} style={{padding:"10px 16px",borderRadius:8,border:"none",background:"#f5c842",color:"#111",fontWeight:700,cursor:"pointer",fontSize:13}}>追加</button>
+              </div>
+            </div>
+
+            <div style={{background:"#161616",borderRadius:12,padding:20,border:"1px solid #2a2a2a",marginBottom:16}}>
+              <div style={{fontSize:13,color:"#888",marginBottom:12}}>勘定科目管理</div>
+              <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+                {accounts.map(acc => (
+                  <div key={acc} style={{display:"flex",alignItems:"center",gap:8,background:"#1e1e1e",borderRadius:10,padding:"10px 12px"}}>
+                    <span style={{flex:1,fontSize:13,color:"#ddd"}}>{acc}</span>
+                    {accounts.length>1 && (
+                      <button onClick={() => {
+                        const na = accounts.filter(a => a !== acc);
+                        setAccounts(na);
+                        saveSettings(null,null,null,na,null);
+                        showToast(acc+"を削除しました");
+                      }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:16}}>🗑️</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <input value={newAccountName} onChange={e => setNewAccountName(e.target.value)} placeholder="新しい勘定科目名"
+                  style={{flex:1,padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:14,outline:"none"}} />
+                <button onClick={() => {
+                  const name = newAccountName.trim();
+                  if (!name) return showToast("科目名を入力してください","error");
+                  if (accounts.includes(name)) return showToast("既に存在します","error");
+                  const na = [...accounts, name];
+                  setAccounts(na);
+                  saveSettings(null,null,null,na,null);
+                  setNewAccountName("");
+                  showToast(name+"を追加しました");
+                }} style={{padding:"10px 16px",borderRadius:8,border:"none",background:"#f5c842",color:"#111",fontWeight:700,cursor:"pointer",fontSize:13}}>追加</button>
+              </div>
+            </div>
+
+            <div style={{background:"#161616",borderRadius:12,padding:20,border:"1px solid #2a2a2a",marginBottom:16}}>
+              <div style={{fontSize:13,color:"#888",marginBottom:12}}>税率管理</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14}}>
+                {taxRates.map(r => (
+                  <div key={r} style={{display:"flex",alignItems:"center",gap:6,background:"#1e1e1e",borderRadius:20,padding:"6px 12px"}}>
+                    <span style={{fontSize:13,color:"#ddd"}}>{r}%</span>
+                    {taxRates.length>1 && (
+                      <button onClick={() => {
+                        const nt = taxRates.filter(t => t !== r);
+                        setTaxRates(nt);
+                        saveSettings(null,null,null,null,nt);
+                        showToast(r+"%を削除しました");
+                      }} style={{background:"none",border:"none",color:"#666",cursor:"pointer",fontSize:14}}>✕</button>
+                    )}
+                  </div>
+                ))}
+                <div style={{display:"flex",alignItems:"center",gap:6,background:"#1e1e1e",borderRadius:20,padding:"6px 12px"}}>
+                  <span style={{fontSize:13,color:"#5dc98a"}}>対象外</span>
+                  <span style={{fontSize:10,color:"#555"}}>(固定)</span>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <input value={newTaxRate} onChange={e => setNewTaxRate(e.target.value)} placeholder="例：15" type="number" min="0" max="100"
+                  style={{flex:1,padding:"10px 12px",background:"#1a1a1a",border:"1px solid #2e2e2e",borderRadius:8,color:"#f0ede8",fontSize:14,outline:"none"}} />
+                <button onClick={() => {
+                  const val = parseInt(newTaxRate);
+                  if (isNaN(val) || val < 0 || val > 100) return showToast("0〜100の数値を入力してください","error");
+                  if (taxRates.includes(val)) return showToast("既に存在します","error");
+                  const nt = [...taxRates, val].sort((a,b)=>a-b);
+                  setTaxRates(nt);
+                  saveSettings(null,null,null,null,nt);
+                  setNewTaxRate("");
+                  showToast(val+"%を追加しました");
                 }} style={{padding:"10px 16px",borderRadius:8,border:"none",background:"#f5c842",color:"#111",fontWeight:700,cursor:"pointer",fontSize:13}}>追加</button>
               </div>
             </div>
